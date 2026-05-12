@@ -1,3 +1,4 @@
+import React from 'react';
 import { coupons, orderStates, sampleOrders } from '../data/mockData.js';
 
 export default function AdminPanel({ products }) {

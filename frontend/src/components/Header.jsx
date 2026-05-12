@@ -1,3 +1,4 @@
+import React from 'react';
 import { Menu, ShoppingBag, UserRound } from 'lucide-react';
 
 const navItems = [

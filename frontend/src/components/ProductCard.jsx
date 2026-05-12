@@ -1,3 +1,4 @@
+import React from 'react';
 import { Plus } from 'lucide-react';
 
 export default function ProductCard({ product, onAdd }) {

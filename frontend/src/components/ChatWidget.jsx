@@ -1,5 +1,5 @@
+import React, { useState } from 'react';
 import { MessageCircle, Send } from 'lucide-react';
-import { useState } from 'react';
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);

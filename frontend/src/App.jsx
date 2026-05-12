@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Header from './components/Header.jsx';
 import ChatWidget from './components/ChatWidget.jsx';
 import LandingPage from './pages/LandingPage.jsx';

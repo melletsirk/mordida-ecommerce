@@ -1,3 +1,4 @@
+import React from 'react';
 import ProductCard from '../components/ProductCard.jsx';
 import { categories } from '../data/mockData.js';
 

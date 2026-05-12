@@ -1,3 +1,5 @@
+import React from 'react';
+
 export function HistoryPage({ setView }) {
   const history = [
     ['#1024', 'Doble Mordida + Papas Mordida', 'ENTREGADO', 'S/ 34.02'],

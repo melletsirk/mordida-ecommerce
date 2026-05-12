@@ -1,3 +1,4 @@
+import React from 'react';
 import { CheckCircle2, MapPin } from 'lucide-react';
 import { orderStates } from '../data/mockData.js';
 
