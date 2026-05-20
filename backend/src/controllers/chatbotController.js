@@ -15,6 +15,29 @@ Tablas principales de la base de datos PostgreSQL de la hamburguesería Mordida:
 - pedido_detalle(id, pedido_id, producto_id, cantidad, precio_unitario)
 `;
 
+// Helper para reintentar automáticamente si hay un error 503 (alta demanda)
+async function generateConReintento(promptText) {
+  let ultimoError;
+  for (let intento = 1; intento <= 3; intento++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash', // Modelo válido actual
+        contents: promptText
+      });
+      return response;
+    } catch (error) {
+      ultimoError = error;
+      if (error.status === 503) {
+        console.warn(`Intento ${intento}: Gemini saturado (503). Reintentando en 1.5s...`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw ultimoError;
+}
+
 export const askChatbot = async (req, res) => {
   try {
     const pregunta = req.body?.pregunta || req.body?.mensaje || '';
@@ -39,12 +62,13 @@ Tu única tarea es devolver la consulta SQL pura que responda a la pregunta del 
 Pregunta del usuario: ${pregunta}
 `;
 
-    const sqlResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: sqlPrompt
-    });
+    const sqlResponse = await generateConReintento(sqlPrompt);
 
-    let sqlQuery = sqlResponse.text.trim();
+    let sqlQuery = sqlResponse.text || '';
+    if (!sqlQuery) {
+      throw new Error('Gemini no devolvió texto para el SQL. El modelo puede estar saturado.');
+    }
+    sqlQuery = sqlQuery.trim();
     // Limpiar posibles bloques de markdown en caso de que el LLM no obedezca del todo
     sqlQuery = sqlQuery.replace(/```sql/gi, '').replace(/```/g, '').trim();
 
@@ -57,8 +81,8 @@ Pregunta del usuario: ${pregunta}
       dbResult = rows;
     } catch (dbError) {
       console.error('Error al ejecutar SQL:', dbError);
-      return res.status(500).json({ 
-        error: 'Error al ejecutar la consulta SQL generada en la base de datos.', 
+      return res.status(500).json({
+        error: 'Error al ejecutar la consulta SQL generada en la base de datos.',
         sql_generado: sqlQuery,
         detalle_error: dbError.message
       });
@@ -78,12 +102,9 @@ Resultados obtenidos (JSON):
 ${JSON.stringify(dbResult)}
 `;
 
-    const nlResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: nlPrompt
-    });
+    const nlResponse = await generateConReintento(nlPrompt);
 
-    const respuestaFinal = nlResponse.text;
+    const respuestaFinal = nlResponse.text || 'Lo siento, el servicio de inteligencia artificial está muy saturado en este momento. Por favor intenta de nuevo en unos segundos.';
 
     // Enviar la respuesta
     res.json({
