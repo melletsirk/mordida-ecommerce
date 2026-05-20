@@ -58,6 +58,7 @@ Esquema de la base de datos de la hamburguesería:
 ${schemaText}
 
 Tu única tarea es devolver la consulta SQL pura que responda a la pregunta del usuario, sin markdown (como \`\`\`sql), sin explicaciones y sin texto adicional. Debe estar lista para ser ejecutada directamente.
+La respuesta va a ser en una ventana pequeña, considera un formato adecuado. 
 
 Pregunta del usuario: ${pregunta}
 `;
