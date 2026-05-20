@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { adminVentasChat, clienteChat } from '../controllers/chatbotController.js';
+import { askChatbot } from '../controllers/chatbotController.js';
 
 const router = Router();
 
-router.post('/cliente', clienteChat);
-router.post('/admin/ventas', adminVentasChat);
+// Endpoint unificado para el chatbot con Text-to-SQL
+router.post('/', askChatbot);
 
 export default router;
