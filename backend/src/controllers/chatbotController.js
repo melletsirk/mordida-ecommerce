@@ -2,10 +2,9 @@ import { GoogleGenAI } from '@google/genai';
 import { pool } from '../config/db.js';
 import { env } from '../config/env.js';
 
-// Inicializar el SDK de Gemini
 const ai = new GoogleGenAI({ apiKey: env.geminiApiKey });
 
-// Resumen del esquema para inyectar en el prompt
+// ─── Esquema de la base de datos ────────────────────────────────────────────
 const schemaText = `
 Tablas principales de la base de datos PostgreSQL de la hamburguesería Mordida:
 - categorias(id, nombre, slug)
@@ -15,21 +14,32 @@ Tablas principales de la base de datos PostgreSQL de la hamburguesería Mordida:
 - pedido_detalle(id, pedido_id, producto_id, cantidad, precio_unitario)
 `;
 
-// Helper para reintentar automáticamente si hay un error 503 (alta demanda)
-async function generateConReintento(promptText) {
+// ─── Palabras clave que indican una pregunta relevante al ecommerce ──────────
+const KEYWORDS_RELEVANTES = [
+  'pedido', 'producto', 'hamburgues', 'precio', 'categoria', 'usuario',
+  'venta', 'total', 'cupon', 'envio', 'repartidor', 'disponible', 'menu',
+  'orden', 'compra', 'pago', 'cliente', 'stock', 'destacado', 'mordida',
+  'cuanto', 'cuánto', 'lista', 'mostrar', 'ver', 'cuántos', 'cuantos',
+];
+
+// ─── Comandos SQL peligrosos (solo lectura permitida) ────────────────────────
+const SQL_PELIGROSO = /^\s*(drop|delete|truncate|insert|update|alter|create|grant|revoke)\s/i;
+
+// ─── Helper: reintento automático en caso de 503 ────────────────────────────
+async function generateConReintento(promptText, maxIntentos = 3) {
   let ultimoError;
-  for (let intento = 1; intento <= 3; intento++) {
+  for (let intento = 1; intento <= maxIntentos; intento++) {
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash', // Modelo válido actual
-        contents: promptText
+        model: 'gemini-2.5-flash',
+        contents: promptText,
       });
       return response;
     } catch (error) {
       ultimoError = error;
       if (error.status === 503) {
         console.warn(`Intento ${intento}: Gemini saturado (503). Reintentando en 1.5s...`);
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       } else {
         throw error;
       }
@@ -38,44 +48,104 @@ async function generateConReintento(promptText) {
   throw ultimoError;
 }
 
+// ─── Helper: verificar si la pregunta es relevante sin llamar a la API ───────
+function esConsultaRelevante(pregunta) {
+  const texto = pregunta.toLowerCase();
+  return KEYWORDS_RELEVANTES.some((kw) => texto.includes(kw));
+}
+
+// ─── Controlador principal ───────────────────────────────────────────────────
 export const askChatbot = async (req, res) => {
   try {
-    const pregunta = req.body?.pregunta || req.body?.mensaje || '';
+    const pregunta = (req.body?.pregunta || req.body?.mensaje || '').trim();
+
     if (!pregunta) {
-      return res.status(400).json({ error: 'Falta la pregunta del usuario en el body (usa "pregunta" o "mensaje")' });
+      return res.status(400).json({
+        error: 'Falta la pregunta en el body (usa "pregunta" o "mensaje").',
+      });
     }
 
     if (!env.geminiApiKey) {
-      return res.status(500).json({ error: 'La API Key de Gemini no está configurada en las variables de entorno' });
+      return res.status(500).json({
+        error: 'La API Key de Gemini no está configurada en las variables de entorno.',
+      });
     }
 
-    // -------------------------------------------------------------
-    // Paso 1: Generar la consulta SQL con Gemini
-    // -------------------------------------------------------------
-    const sqlPrompt = `
-Eres un asistente experto en bases de datos que convierte lenguaje natural a consultas SQL para PostgreSQL.
-Esquema de la base de datos de la hamburguesería:
+    // ── Filtro local: rechazar preguntas sin relación al ecommerce ────────────
+    // Evita gastar un token de API en preguntas como "¿Cuál es la capital de Francia?"
+    if (!esConsultaRelevante(pregunta)) {
+      return res.json({
+        respuesta:
+          '¡Hola! Solo puedo ayudarte con consultas sobre Mordida: productos, pedidos, precios, categorías y más. ¿En qué te puedo ayudar?',
+        debug: { sql: null, datos: null },
+      });
+    }
+
+    // ── Paso único: un solo prompt que devuelve JSON estructurado ─────────────
+    // Al combinar la generación de SQL y la respuesta natural en una sola llamada
+    // se reduce el consumo de la API a la mitad por solicitud.
+    const promptCombinado = `
+Eres el asistente inteligente del ecommerce de hamburguesas "Mordida".
+Tu trabajo es responder preguntas sobre el negocio consultando una base de datos PostgreSQL.
+
 ${schemaText}
 
-Tu única tarea es devolver la consulta SQL pura que responda a la pregunta del usuario, sin markdown (como \`\`\`sql), sin explicaciones y sin texto adicional. Debe estar lista para ser ejecutada directamente.
-La respuesta va a ser en una ventana pequeña, considera un formato adecuado. 
+INSTRUCCIONES:
+1. Lee la pregunta del usuario.
+2. Si la pregunta NO tiene relación con el ecommerce (productos, pedidos, usuarios, ventas, etc.),
+   responde SOLO con este JSON: {"fuera_de_tema": true}
+3. Si es relevante, genera una consulta SQL de solo lectura (SELECT) que responda la pregunta.
+4. Devuelve ÚNICAMENTE un objeto JSON con esta estructura exacta, sin markdown ni texto extra:
+{
+  "fuera_de_tema": false,
+  "sql": "<consulta SELECT aquí>"
+}
 
-Pregunta del usuario: ${pregunta}
+REGLAS para el SQL:
+- Solo SELECT. Nunca DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE.
+- Sin punto y coma al final.
+- Usa alias claros en español cuando sea posible (ej: precio AS precio_unitario).
+- Limita resultados con LIMIT 50 si el resultado podría ser muy extenso.
+
+Pregunta del usuario: "${pregunta}"
 `;
 
-    const sqlResponse = await generateConReintento(sqlPrompt);
+    const sqlResponse = await generateConReintento(promptCombinado);
 
-    let sqlQuery = sqlResponse.text || '';
-    if (!sqlQuery) {
-      throw new Error('Gemini no devolvió texto para el SQL. El modelo puede estar saturado.');
+    let rawText = (sqlResponse.text || '').trim();
+    rawText = rawText.replace(/```json|```/gi, '').trim();
+
+    // ── Parsear respuesta JSON del modelo ─────────────────────────────────────
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      console.error('Gemini no devolvió JSON válido:', rawText);
+      return res.status(500).json({
+        error: 'El modelo devolvió una respuesta inesperada. Intenta reformular tu pregunta.',
+      });
     }
-    sqlQuery = sqlQuery.trim();
-    // Limpiar posibles bloques de markdown en caso de que el LLM no obedezca del todo
-    sqlQuery = sqlQuery.replace(/```sql/gi, '').replace(/```/g, '').trim();
 
-    // -------------------------------------------------------------
-    // Paso 2: Ejecutar la consulta en la base de datos
-    // -------------------------------------------------------------
+    // ── El modelo detectó una pregunta fuera de tema ──────────────────────────
+    if (parsed.fuera_de_tema) {
+      return res.json({
+        respuesta:
+          '¡Hola! Solo puedo ayudarte con consultas sobre Mordida: productos, pedidos, precios, categorías y más. ¿En qué te puedo ayudar?',
+        debug: { sql: null, datos: null },
+      });
+    }
+
+    // ── Validación de seguridad: bloquear SQL peligroso ───────────────────────
+    const sqlQuery = (parsed.sql || '').trim();
+    if (!sqlQuery || SQL_PELIGROSO.test(sqlQuery)) {
+      console.warn('SQL bloqueado por seguridad:', sqlQuery);
+      return res.status(400).json({
+        error: 'La consulta generada no está permitida. Solo se aceptan consultas de lectura.',
+        debug: { sql: sqlQuery },
+      });
+    }
+
+    // ── Ejecutar la consulta en la base de datos ──────────────────────────────
     let dbResult;
     try {
       const { rows } = await pool.query(sqlQuery);
@@ -83,42 +153,44 @@ Pregunta del usuario: ${pregunta}
     } catch (dbError) {
       console.error('Error al ejecutar SQL:', dbError);
       return res.status(500).json({
-        error: 'Error al ejecutar la consulta SQL generada en la base de datos.',
-        sql_generado: sqlQuery,
-        detalle_error: dbError.message
+        error: 'No pude obtener esa información de la base de datos. Intenta reformular tu pregunta.',
+        debug: { sql: sqlQuery, detalle_error: dbError.message },
       });
     }
 
-    // -------------------------------------------------------------
-    // Paso 3: Generar la respuesta final en lenguaje natural con Gemini
-    // -------------------------------------------------------------
+    // ── Sin resultados: respuesta amigable sin llamar a la API de nuevo ───────
+    if (dbResult.length === 0) {
+      return res.json({
+        respuesta: 'No encontré información relacionada con tu consulta. ¿Puedes darme más detalles?',
+        debug: { sql: sqlQuery, datos: [] },
+      });
+    }
+
+    // ── Generar respuesta en lenguaje natural (segunda llamada solo si hay datos) ──
     const nlPrompt = `
-Eres un asistente virtual de un ecommerce de hamburguesas llamado "Mordida".
-Tu tarea es responder a la pregunta del usuario de forma amable, concisa y útil, basándote ÚNICAMENTE en los resultados de la base de datos proporcionados a continuación en formato JSON.
-No menciones la base de datos ni los términos técnicos como JSON o SQL en tu respuesta.
+Eres el asistente virtual de "Mordida", una hamburguesería online.
+Responde de forma amable, breve y útil a la pregunta del usuario basándote ÚNICAMENTE en los datos JSON proporcionados.
+No menciones términos técnicos como SQL, JSON o base de datos.
+Si los datos contienen una lista, preséntala de forma clara y legible.
 
-Pregunta del usuario: "${pregunta}"
-
-Resultados obtenidos (JSON):
-${JSON.stringify(dbResult)}
+Pregunta: "${pregunta}"
+Datos: ${JSON.stringify(dbResult)}
 `;
 
     const nlResponse = await generateConReintento(nlPrompt);
+    const respuestaFinal =
+      nlResponse.text?.trim() ||
+      'El servicio está muy saturado en este momento. Por favor intenta de nuevo en unos segundos.';
 
-    const respuestaFinal = nlResponse.text || 'Lo siento, el servicio de inteligencia artificial está muy saturado en este momento. Por favor intenta de nuevo en unos segundos.';
-
-    // Enviar la respuesta
-    res.json({
+    return res.json({
       respuesta: respuestaFinal,
-      // Se envían los detalles adicionales por si son útiles para el frontend o debugging en el proyecto universitario
-      debug: {
-        sql: sqlQuery,
-        datos: dbResult
-      }
+      debug: { sql: sqlQuery, datos: dbResult },
     });
 
   } catch (error) {
-    console.error('Error en Text-to-SQL Chatbot:', error);
-    res.status(500).json({ error: 'Ocurrió un error inesperado procesando la solicitud del chatbot.' });
+    console.error('Error en chatbot:', error);
+    return res.status(500).json({
+      error: 'Ocurrió un error inesperado. Por favor intenta de nuevo.',
+    });
   }
 };
