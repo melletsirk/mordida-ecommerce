@@ -2,6 +2,20 @@
 
 Mordida es una app full stack para pedidos de comida rapida: clientes compran, administradores gestionan operaciones y repartidores actualizan entregas. Incluye frontend React + Vite, API REST con Express, PostgreSQL, JWT, pagos simulados, ruta simulada y estructura lista para integrar un chatbot con OpenAI API mas adelante.
 
+## Sobre este fork
+
+Este proyecto es un fork de [natt25/mordida-ecommerce](https://github.com/natt25/mordida-ecommerce). El repositorio original dejaba la estructura lista para un futuro chatbot, pero sin implementar.
+
+**Mi contribución (rama `feature/chatbot`, integrada a `main`):** implementé el chatbot administrativo end-to-end con la API de Gemini.
+
+- Conversión de preguntas en lenguaje natural a consultas sobre el esquema de PostgreSQL (categorías, productos, usuarios, pedidos).
+- Filtro de relevancia que evita llamadas innecesarias a la API cuando la pregunta no tiene que ver con el negocio.
+- Bloqueo explícito de comandos SQL destructivos (DROP, DELETE, TRUNCATE, INSERT, UPDATE, ALTER) — el chatbot solo puede leer datos, nunca modificarlos.
+- Reintento automático con backoff ante errores 503 de la API.
+- Widget de chat en el frontend conectado al endpoint administrativo.
+
+Código: `backend/src/controllers/chatbotController.js`, `backend/src/routes/chatbotRoutes.js`, `frontend/src/components/ChatWidget.jsx`.
+
 ## Estructura
 
 ```txt
